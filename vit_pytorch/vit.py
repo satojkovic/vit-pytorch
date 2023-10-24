@@ -57,6 +57,22 @@ class PatchEncoder(nn.Module):
         return x
 
 
+class MLP(nn.Module):
+    def __init__(self, embed_dim, mlp_dim, dropout_ratio=0.5):
+        super(MLP, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, mlp_dim),
+            nn.GELU(),
+            nn.Dropout(dropout_ratio),
+            nn.Linear(mlp_dim, embed_dim),
+            nn.Dropout(dropout_ratio),
+        )
+
+    def forward(self, x):
+        return self.mlp(x)
+
+
 if __name__ == "__main__":
     patch_extractor = Patches()
     dummy_x = torch.randn((10, 3, 224, 224))
