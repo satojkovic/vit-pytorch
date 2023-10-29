@@ -159,9 +159,10 @@ class ViT(nn.Module):
         self.cls_head = nn.Linear(self.embed_dim, self.num_classes)
 
     def forward(self, x):
-        z = self.patch_encoder(x)
-        y = self.transformer_encoder(z)
-        out = self.cls_head(y)
+        x = self.patch_encoder(x)
+        for i in range(self.num_layers):
+            x = self.transformer_encoder(x)
+        out = self.cls_head(x)
         return out
 
 
