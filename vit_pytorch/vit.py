@@ -102,7 +102,6 @@ class MLP(nn.Module):
     def __init__(self, embed_dim, mlp_dim, dropout_ratio=0.5):
         super(MLP, self).__init__()
         self.mlp = nn.Sequential(
-            nn.LayerNorm(embed_dim),
             nn.Linear(embed_dim, mlp_dim),
             nn.GELU(),
             nn.Dropout(dropout_ratio),
@@ -112,6 +111,20 @@ class MLP(nn.Module):
 
     def forward(self, x):
         return self.mlp(x)
+
+
+class TransformerEncoder(nn.Module):
+    def __init__(self, num_heads, embed_dim, mlp_dim, drop_p):
+        super().__init__()
+        self.layer_norm_mha = nn.LayerNorm(embed_dim)
+        self.mha = MultiHeadSelfAttention(num_heads, embed_dim, drop_p)
+        self.layer_norm_mlp = nn.LayerNorm(embed_dim)
+        self.mlp = MLP(embed_dim, mlp_dim, drop_p)
+
+    def forward(self, x):
+        x = self.mha(self.layer_norm_mha(x)) + x
+        out = self.mlp(self.layer_norm_mlp(x)) + x
+        return out
 
 
 if __name__ == "__main__":
