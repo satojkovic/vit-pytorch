@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 import einops
+import math
 
 
 class Patches(nn.Module):
@@ -57,6 +59,43 @@ class PatchEncoder(nn.Module):
         x += self.pos_embedding
 
         return x
+
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, num_heads, embed_dim, drop_p):
+        super(MultiHeadSelfAttention, self).__init__()
+        self.num_heads = num_heads
+        self.q_net = nn.Linear(embed_dim, embed_dim)
+        self.k_net = nn.Linear(embed_dim, embed_dim)
+        self.v_net = nn.Linear(embed_dim, embed_dim)
+        self.proj_net = nn.Linear(embed_dim, embed_dim)  # W_o
+
+        self.attn_drop = nn.Dropout(drop_p)
+        self.proj_drop = nn.Dropout(drop_p)
+
+    def forward(self, x):
+        # B: batch size, T: sequence length, D: embedding dimension
+        B, T, D = x.shape
+
+        k = self.num_heads
+        Dh = D // k
+
+        q = self.q_net(x).reshape(B, T, k, Dh).transpose(0, 2, 1, 3)  # (B, k, T, Dh)
+        k = self.k_net(x).reshape(B, T, k, Dh).transpose(0, 2, 1, 3)
+        v = self.v_net(x).reshape(B, T, k, Dh).transpose(0, 2, 1, 3)
+
+        # attention matrix
+        weights = q @ k.transpose(2, 3) / math.sqrt(Dh)  # (B, k, T, T)
+        normalized_weights = F.softmax(weights, dim=-1)
+
+        # attention
+        attention = self.attn_drop(normalized_weights @ v)  # (B, k, T, Dh)
+
+        # gather head
+        attention = attention.transpose(1, 2).view(B, T, k * Dh)
+
+        out = self.proj_drop(self.proj_net(attention))
+        return out
 
 
 class MLP(nn.Module):
