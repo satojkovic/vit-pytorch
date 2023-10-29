@@ -5,14 +5,14 @@ import einops
 import math
 
 
-class Patches(nn.Module):
-    def __init__(self, image_size=224, in_channels=3, patch_size=16):
-        super(Patches, self).__init__()
+class PatchEncoder(nn.Module):
+    def __init__(self, image_size, in_channels, patch_size, embed_dim):
+        super(PatchEncoder, self).__init__()
         self.image_size = image_size
         self.in_channels = in_channels
         self.patch_size = patch_size
-        assert self.image_size % self.patch_size == 0
-        self.patch_dim = self.in_channels * (self.patch_size**2)
+        self.patch_dim = in_channels * (patch_size**2)
+        self.num_patches = self.image_size**2 // self.patch_size**2
 
         self.conv = nn.Conv2d(
             in_channels=self.in_channels,
@@ -21,10 +21,19 @@ class Patches(nn.Module):
             stride=self.patch_size,
         )
 
+        self.embed_dim = embed_dim
+        self.encoder = nn.Linear(
+            in_features=self.patch_dim, out_features=self.embed_dim
+        )
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embed_dim))
+        self.pos_embedding = nn.Parameter(
+            torch.randn(1, self.num_patches + 1, self.embed_dim)
+        )
+
     def forward(self, x):
         # (B, C, H, W) -> (B, D, H/P, W/P)
         patches = self.conv(x)
-        b, d, h, w = patches.shape
+        b, d, _, _ = patches.shape
 
         # (B, D, H/P, W/P) -> (B, D, Np)
         # Np = H*W/P^2
@@ -33,32 +42,17 @@ class Patches(nn.Module):
         # (B, D, Np) -> (B, Np, D)
         patches = patches.transpose(1, 2)
 
-        return patches
+        z = self.encoder(patches)
 
-
-class PatchEncoder(nn.Module):
-    def __init__(self, num_patches, patch_dim, embed_dim):
-        super(PatchEncoder, self).__init__()
-        self.patch_dim = patch_dim
-        self.embed_dim = embed_dim
-        self.encoder = nn.Linear(
-            in_features=self.patch_dim, out_features=self.embed_dim
-        )
-        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embed_dim))
-        self.pos_embedding = nn.Parameter(
-            torch.randn(1, num_patches + 1, self.embed_dim)
-        )
-
-    def forward(self, x):
-        batch_size = x.shape[0]
-        x = self.encoder(x)
         # Add cls token
-        cls_tokens = einops.repeat(self.cls_token, "1 1 d -> b 1 d", b=batch_size)
-        x = torch.cat((cls_tokens, x), dim=1)
-        # Add position embedding
-        x += self.pos_embedding
+        cls_tokens = einops.repeat(self.cls_token, "1 1 d -> b 1 d", b=b)
 
-        return x
+        z = torch.cat((cls_tokens, z), dim=1)
+
+        # Add position embedding
+        z += self.pos_embedding
+
+        return z
 
 
 class MultiHeadSelfAttention(nn.Module):
@@ -77,12 +71,13 @@ class MultiHeadSelfAttention(nn.Module):
         # B: batch size, T: sequence length, D: embedding dimension
         B, T, D = x.shape
 
-        k = self.num_heads
-        Dh = D // k
+        Dh = D // self.num_heads
 
-        q = self.q_net(x).reshape(B, T, k, Dh).transpose(0, 2, 1, 3)  # (B, k, T, Dh)
-        k = self.k_net(x).reshape(B, T, k, Dh).transpose(0, 2, 1, 3)
-        v = self.v_net(x).reshape(B, T, k, Dh).transpose(0, 2, 1, 3)
+        q = (
+            self.q_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
+        )  # (B, k, T, Dh)
+        k = self.k_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
+        v = self.v_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
 
         # attention matrix
         weights = q @ k.transpose(2, 3) / math.sqrt(Dh)  # (B, k, T, T)
@@ -92,7 +87,9 @@ class MultiHeadSelfAttention(nn.Module):
         attention = self.attn_drop(normalized_weights @ v)  # (B, k, T, Dh)
 
         # gather head
-        attention = attention.transpose(1, 2).view(B, T, k * Dh)
+        attention = (
+            attention.transpose(1, 2).contiguous().view(B, T, self.num_heads * Dh)
+        )
 
         out = self.proj_drop(self.proj_net(attention))
         return out
@@ -127,19 +124,72 @@ class TransformerEncoder(nn.Module):
         return out
 
 
+class ViT(nn.Module):
+    def __init__(
+        self,
+        image_size,
+        in_channels,
+        patch_size,
+        num_layers,
+        embed_dim,
+        mlp_dim,
+        num_heads,
+        drop_p,
+        num_classes,
+    ):
+        super().__init__()
+        self.image_size = image_size
+        self.in_channels = in_channels
+        self.patch_size = patch_size
+        self.num_layers = num_layers
+        self.embed_dim = embed_dim
+        self.mlp_dim = mlp_dim
+        self.num_heads = num_heads
+        self.drop_p = drop_p
+        self.num_classes = num_classes
+
+        self.patch_encoder = PatchEncoder(
+            self.image_size, self.in_channels, self.patch_size, self.embed_dim
+        )
+
+        self.transformer_encoder = TransformerEncoder(
+            self.num_heads, self.embed_dim, self.mlp_dim, self.drop_p
+        )
+
+        self.cls_head = nn.Linear(self.embed_dim, self.num_classes)
+
+    def forward(self, x):
+        z = self.patch_encoder(x)
+        y = self.transformer_encoder(z)
+        out = self.cls_head(y)
+        return out
+
+
 if __name__ == "__main__":
+    import torchsummary
+
     num_batches = 10
     image_size, in_channels = 224, 3
     patch_size = 16
-
-    patch_extractor = Patches(image_size, in_channels, patch_size)
-    dummy_x = torch.randn((num_batches, in_channels, image_size, image_size))
-    patches = patch_extractor(dummy_x)
-    print(f"patches: {patches.shape}")
-
-    num_patches = patches.shape[1]
-    patch_dim = patches.shape[2]
     embed_dim = 768
-    patch_encoder = PatchEncoder(num_patches, patch_dim, embed_dim)
-    encoded_patches = patch_encoder(patches)
-    print(f"encoded_patches: {encoded_patches.shape}")
+    num_layers = 12
+    mlp_dim = 3072
+    num_heads = 12
+    drop_p = 0.5
+    num_classes = 10
+
+    dummy_x = torch.randn((num_batches, in_channels, image_size, image_size))
+    vit_model = ViT(
+        image_size=image_size,
+        in_channels=in_channels,
+        patch_size=patch_size,
+        num_layers=num_layers,
+        embed_dim=embed_dim,
+        mlp_dim=mlp_dim,
+        num_heads=num_heads,
+        drop_p=drop_p,
+        num_classes=num_classes,
+    )
+    out = vit_model(dummy_x)
+    print(f"out: {out.shape}")
+    torchsummary.summary(vit_model, input_size=(in_channels, image_size, image_size))
