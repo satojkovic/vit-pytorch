@@ -162,7 +162,7 @@ class ViT(nn.Module):
         x = self.patch_encoder(x)
         for i in range(self.num_layers):
             x = self.transformer_encoder(x)
-        out = self.cls_head(x)
+        out = self.cls_head(x[:, 0])
         return out
 
 
