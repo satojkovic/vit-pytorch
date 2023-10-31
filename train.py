@@ -40,20 +40,20 @@ if __name__ == "__main__":
 
     for epoch in range(10):
         for i, (images, labels) in enumerate(trainloader):
-            # フォワードプロパゲーション
+            # Forward propagation
             outputs = net(images)
-            # 損失の計算
+            # Calculate the loss
             loss = criterion(outputs, labels)
-            # バックプロパゲーション
+            # Back propagation
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-        # 学習の進捗を表示
+        # Print the progress of the training
         if epoch % 1 == 0:
             print("Epoch: {} Loss: {:.4f}".format(epoch, loss.item()))
 
-    # テストデータで精度を評価
+    # Evaluate the model with the test dataset
     correct = 0
     total = 0
     for images, labels in testloader:
