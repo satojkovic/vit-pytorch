@@ -73,9 +73,8 @@ class MultiHeadSelfAttention(nn.Module):
 
         Dh = D // self.num_heads
 
-        q = (
-            self.q_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
-        )  # (B, k, T, Dh)
+        # q, k, v: (B, num_heads, T, Dh)
+        q = self.q_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
         k = self.k_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
         v = self.v_net(x).view(B, T, self.num_heads, Dh).transpose(1, 2)
 
